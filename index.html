@@ -507,7 +507,19 @@ function evTime(e) {               // Zeitpunkt des Antippens (nicht der Verarbe
 const nextFull = now => (Math.floor(now / 60000) + 1) * 60000;
 const nextHalf = now => (Math.floor(now / 30000) + 1) * 30000;
 function autoLock() {               // beim Start automatisch sperren (abschaltbar in den Einstellungen)
-  if (S.autoLock !== false && !S.locked) { S.locked = true; applyLock(); toast("🔒 Automatisch gesperrt – nur STOPP ist aktiv"); }
+  if (S.autoLock !== false && !S.locked) { S.locked = true; S.lockAuto = true; applyLock(); toast("🔒 Automatisch gesperrt – nur STOPP ist aktiv"); }
+}
+/* Ein Timer ist „aktiv“, solange er auf den Start wartet oder seine letzte Sollzeit noch nicht vorbei ist. */
+function timerActive(t, now) {
+  if (t.state === "armed") return true;
+  if (t.state !== "running") return false;
+  const sg = segs(t); if (!sg.length) return true;
+  return now - t.start < sg[sg.length - 1].end + 1000;   // +1 s: „JETZT!“ noch zeigen
+}
+function autoUnlockCheck(now) {      // automatisch gesperrt + kein aktiver Timer mehr -> entsperren
+  if (!S.locked || !S.lockAuto) return;
+  for (const p of S.profiles) for (const t of p.timers) if (timerActive(t, now)) return;
+  S.locked = false; S.lockAuto = false; save(); applyLock(); toast("🔓 Automatisch entsperrt");
 }
 function arm(t, T) { t.start = T; t.stop = null; t.state = "armed"; autoLock(); save(); requestSync(); renderTimers(); }
 
@@ -629,6 +641,7 @@ function updateTimers(now) {
     if (t.state === "armed" && now >= t.start) { t.state = "running"; save(); }
     soundEvents(t, now, ev);
   }
+  autoUnlockCheck(now);
   if (testTone) for (const T of [Math.floor(now / 1000) * 1000 + 1000, Math.floor(now / 1000) * 1000 + 2000])
     if (T - now <= LOOKAHEAD * 1000) ev.set("test|" + T, { T, m: T % 60000 === 0 ? "tock" : "tick" });
   audioSchedule(ev);
@@ -780,7 +793,7 @@ function settings() {
     <div class="set"><h4>Zeitquelle</h4><p>PTB-Atomzeit über das Internet oder die GPS-Zeit des Handys.</p>
       <div class="seg2"><button data-src="ptb">PTB-Atomzeit</button><button data-src="gps">GPS (Handy)</button></div></div>
     <div class="set"><h4>Design</h4><div class="seg2"><button data-d="8">Instrument</button><button data-d="10">Graustufen</button></div></div>
-    <div class="set"><h4>Schloss</h4><p>Beim Starten eines Timers sperrt sich die App von selbst – dann ist nur STOPP aktiv. Entsperren: Schloss 1,5 s gedrückt halten.</p>
+    <div class="set"><h4>Schloss</h4><p>Beim Starten eines Timers sperrt sich die App von selbst – dann ist nur STOPP aktiv. Sie entsperrt sich wieder, wenn STOPP gedrückt wird oder die letzte Sollzeit vorbei ist (und kein anderer Timer mehr läuft). Von Hand entsperren: Schloss 1,5 s gedrückt halten.</p>
       <div class="seg2"><button data-al2="on">Automatisch sperren</button><button data-al2="off">Nicht automatisch</button></div></div>
     <div class="set"><h4>Schriftgröße</h4><p>Alles größer oder kleiner, damit es beim Fahren gut lesbar ist.</p>
       <div class="stepper"><button data-sc="-10">−10</button><button data-sc="-5">−5</button><div class="sv num" id="scv"></div><button data-sc="5">+5</button><button data-sc="10">+10</button></div></div>
@@ -937,12 +950,12 @@ function applyLock() {
   const step = () => {
     if (t0 == null) return;
     const f = Math.min(1, (performance.now() - t0) / 1500); btn.style.setProperty("--hold", (f * 100).toFixed(0) + "%");
-    if (f >= 1) { S.locked = false; save(); applyLock(); stopHold(); toast("🔓 Entsperrt"); return; }
+    if (f >= 1) { S.locked = false; S.lockAuto = false; save(); applyLock(); stopHold(); toast("🔓 Entsperrt"); return; }
     raf = requestAnimationFrame(step);
   };
   btn.addEventListener("pointerdown", (e) => {
     e.preventDefault();
-    if (!S.locked) { S.locked = true; save(); applyLock(); closeSheet(); toast("🔒 Gesperrt – nur STOPP ist aktiv"); return; }
+    if (!S.locked) { S.locked = true; S.lockAuto = false; save(); applyLock(); closeSheet(); toast("🔒 Gesperrt – nur STOPP ist aktiv"); return; }
     t0 = performance.now(); raf = requestAnimationFrame(step);
   });
   for (const ev of ["pointerup", "pointercancel", "pointerleave"]) btn.addEventListener(ev, stopHold);
