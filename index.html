@@ -29,6 +29,18 @@ html[data-design="10"]{
   --fg:#f0f0f0;--muted:#a8a8a8;--dim:#6f6f6f;--btn:#3c3c3c;--primary:#ececec;--onprimary:#111;
   --ring-bg:#3a3a3a;--radius:14px;
 }
+/* Heller Modus */
+html[data-theme="light"]{
+  --bg:#fff;--bg2:#f3f3f3;--panel:#fafafa;--field:#e9e9e9;--line:#c6c6c6;
+  --fg:#000;--muted:#555;--dim:#a5a5a5;--btn:#e0e0e0;--primary:#000;--onprimary:#fff;
+  --ring-bg:#dcdcdc;--tick:#8f8f8f;color-scheme:light;
+}
+html[data-theme="light"][data-design="10"]{
+  --bg:#ececec;--bg2:#e3e3e3;--panel:#f7f7f7;--field:#dedede;--line:#cbcbcb;
+  --fg:#111;--muted:#5a5a5a;--btn:#d6d6d6;--primary:#1d1d1d;--onprimary:#fff;--ring-bg:#d5d5d5;
+}
+html[data-theme="light"] .rv.warn,html[data-theme="light"] .cdbig.warn{color:#3a3a3a}
+html[data-theme="light"] .scrim{background:rgba(0,0,0,.35)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{font-size:calc(16px * var(--scale));height:100%}
 body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);font-family:var(--ui);
@@ -58,7 +70,7 @@ html[data-design="10"] .logo{display:none}
 @media (orientation:landscape) and (max-height:520px){.srcrow{max-width:20rem}.srcrow button{height:2.2rem}}
 .status{margin-top:.3rem;font-size:.8rem;font-weight:700;color:var(--muted);text-align:center;line-height:1.25;padding:.15rem .4rem;border-radius:4px}
 .status.bad{background:var(--primary);color:var(--onprimary)}
-.lockbtn{position:relative;overflow:hidden}
+.lockbtn{position:relative;overflow:hidden;filter:grayscale(1)}
 .lockbtn::after{content:"";position:absolute;left:0;bottom:0;height:100%;width:var(--hold,0%);background:var(--primary);opacity:.45;pointer-events:none}
 html.locked .lockbtn{background:var(--primary);color:var(--onprimary)}
 .lockbar{margin-top:.35rem;padding:.45rem .6rem;border-radius:var(--radius);background:var(--primary);color:var(--onprimary);font-weight:800;font-size:.85rem;text-align:center}
@@ -793,6 +805,7 @@ function settings() {
     <div class="set"><h4>Zeitquelle</h4><p>PTB-Atomzeit über das Internet oder die GPS-Zeit des Handys.</p>
       <div class="seg2"><button data-src="ptb">PTB-Atomzeit</button><button data-src="gps">GPS (Handy)</button></div></div>
     <div class="set"><h4>Design</h4><div class="seg2"><button data-d="8">Instrument</button><button data-d="10">Graustufen</button></div></div>
+    <div class="set"><h4>Darstellung</h4><div class="seg2"><button data-th="dark">Dunkel</button><button data-th="light">Hell</button></div></div>
     <div class="set"><h4>Schloss</h4><p>Beim Starten eines Timers sperrt sich die App von selbst – dann ist nur STOPP aktiv. Sie entsperrt sich wieder, wenn STOPP gedrückt wird oder die letzte Sollzeit vorbei ist (und kein anderer Timer mehr läuft). Von Hand entsperren: Schloss 1,5 s gedrückt halten.</p>
       <div class="seg2"><button data-al2="on">Automatisch sperren</button><button data-al2="off">Nicht automatisch</button></div></div>
     <div class="set"><h4>Schriftgröße</h4><p>Alles größer oder kleiner, damit es beim Fahren gut lesbar ist.</p>
@@ -816,6 +829,7 @@ function settings() {
     <div class="sheetbtns" style="grid-template-columns:1fr"><button class="primary" data-x="close">Schließen</button></div>`);
   const refresh = () => {
     sh.querySelectorAll("[data-d]").forEach(b => b.classList.toggle("on", b.dataset.d === S.design));
+    sh.querySelectorAll("[data-th]").forEach(b => b.classList.toggle("on", b.dataset.th === (S.theme || "dark")));
     renderSource();
     sh.querySelectorAll("[data-al2]").forEach(b => b.classList.toggle("on", (b.dataset.al2 === "on") === (S.autoLock !== false)));
     sh.querySelector("#scv").textContent = Math.round(S.scale * 100) + " %";
@@ -835,6 +849,7 @@ function settings() {
   sh.addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return; audioUnlock();
     if (b.dataset.d) { S.design = b.dataset.d; applyLook(); }
+    if (b.dataset.th) { S.theme = b.dataset.th; applyLook(); }
     if (b.dataset.src) setSource(b.dataset.src);
     if (b.dataset.al2) S.autoLock = b.dataset.al2 === "on";
     if (b.dataset.sc) { S.scale = Math.max(0.7, Math.min(1.6, Math.round(S.scale * 100 + +b.dataset.sc) / 100)); applyLook(); }
@@ -857,8 +872,10 @@ function settings() {
 }
 function applyLook() {
   document.documentElement.dataset.design = S.design;
+  document.documentElement.dataset.theme = S.theme || "dark";
   document.documentElement.style.setProperty("--scale", S.scale);
-  document.querySelector('meta[name=theme-color]').content = S.design === "10" ? "#1b1b1b" : "#000000";
+  const light = S.theme === "light";
+  document.querySelector('meta[name=theme-color]').content = light ? (S.design === "10" ? "#ececec" : "#ffffff") : (S.design === "10" ? "#1b1b1b" : "#000000");
 }
 function drawer() {
   layer.innerHTML = `<div class="scrim" data-close></div><nav class="drawer"><img class="dlogo" alt="Rahmedetal Racing" src="${document.querySelector(".logo").src}">
