@@ -217,7 +217,6 @@ html[data-design="8"] .stop{border-radius:999px}
     <button class="iconbtn" id="setBtn" aria-label="Einstellungen">⚙</button>
   </div>
   <div class="clockrow"><div class="clock num" id="clock2">--:--:--<span class="ms">.---</span></div></div>
-  <div class="srcrow"><button data-src="ptb" class="on">PTB-Atomzeit</button><button data-src="gps">GPS (Handy)</button></div>
   <div class="status" id="status">Verbinde mit der Atomuhr der PTB …</div>
   <div class="lockbar" id="lockBar" hidden>🔒 Gesperrt – nur STOPP ist aktiv. Zum Entsperren das Schloss 1,5 s gedrückt halten.</div>
   <button class="unlock" id="unlockBtn" hidden>🔊 Ton aktivieren – einmal tippen</button>
@@ -778,6 +777,8 @@ function toast(msg) {
 let testTone = false;
 function settings() {
   const sh = sheet(`<h3>Einstellungen</h3>
+    <div class="set"><h4>Zeitquelle</h4><p>PTB-Atomzeit über das Internet oder die GPS-Zeit des Handys.</p>
+      <div class="seg2"><button data-src="ptb">PTB-Atomzeit</button><button data-src="gps">GPS (Handy)</button></div></div>
     <div class="set"><h4>Design</h4><div class="seg2"><button data-d="8">Instrument</button><button data-d="10">Graustufen</button></div></div>
     <div class="set"><h4>Schloss</h4><p>Beim Starten eines Timers sperrt sich die App von selbst – dann ist nur STOPP aktiv. Entsperren: Schloss 1,5 s gedrückt halten.</p>
       <div class="seg2"><button data-al2="on">Automatisch sperren</button><button data-al2="off">Nicht automatisch</button></div></div>
@@ -802,13 +803,14 @@ function settings() {
     <div class="sheetbtns" style="grid-template-columns:1fr"><button class="primary" data-x="close">Schließen</button></div>`);
   const refresh = () => {
     sh.querySelectorAll("[data-d]").forEach(b => b.classList.toggle("on", b.dataset.d === S.design));
+    renderSource();
     sh.querySelectorAll("[data-al2]").forEach(b => b.classList.toggle("on", (b.dataset.al2 === "on") === (S.autoLock !== false)));
     sh.querySelector("#scv").textContent = Math.round(S.scale * 100) + " %";
     sh.querySelector("#alv").textContent = (S.audioLead || 0) + " ms";
     sh.querySelector("#dlv").textContent = dispLead() + " ms" + (S.dispLead == null ? " (auto)" : "");
     sh.querySelector("#testbtn").classList.toggle("on", testTone);
     const gr = gpsRaw();
-    sh.querySelector("#gpsinfo").textContent = S.source !== "gps" ? "GPS ist aus (oben auf „GPS (Handy)“ tippen)" :
+    sh.querySelector("#gpsinfo").textContent = S.source !== "gps" ? "GPS ist aus (oben unter „Zeitquelle“ einschalten)" :
       gr == null ? (G.err || "warte auf GPS-Position …") :
       `${G.total} Positionen · ${gpsSysStamped() ? "⚠ nur Handy-Uhr" : "GPS-Zeitstempel"} · Ausgleich ${Math.round(S.gpsCorr || 0)} ms` +
       (Clock.synced ? ` · Unterschied zu PTB ${Math.round(gr + (S.gpsCorr || 0) - Clock.K)} ms` : "");
@@ -820,6 +822,7 @@ function settings() {
   sh.addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return; audioUnlock();
     if (b.dataset.d) { S.design = b.dataset.d; applyLook(); }
+    if (b.dataset.src) setSource(b.dataset.src);
     if (b.dataset.al2) S.autoLock = b.dataset.al2 === "on";
     if (b.dataset.sc) { S.scale = Math.max(0.7, Math.min(1.6, Math.round(S.scale * 100 + +b.dataset.sc) / 100)); applyLook(); }
     if (b.dataset.al) S.audioLead = Math.max(0, Math.min(1000, (S.audioLead || 0) + +b.dataset.al));
@@ -893,7 +896,7 @@ async function latencyTest() {
     L.push(`  Handy-Uhr weicht von der Atomzeit ab um: ${(Date.now() - performance.now() - smp[0].K).toFixed(0)} ms (wird nicht benutzt)`);
   } catch (e) { L.push("  ⚠ PTB nicht erreichbar: " + (e.message || e)); }
   L.push("", "GPS-ZEIT (HANDY)");
-  if (S.source !== "gps") L.push("  aus – oben auf „GPS (Handy)“ tippen, um sie mitzumessen");
+  if (S.source !== "gps") L.push("  aus – unter Einstellungen → Zeitquelle einschalten, um sie mitzumessen");
   else {
     const gr = gpsRaw();
     if (gr == null) L.push("  " + (G.err || "noch keine GPS-Position"));
@@ -954,7 +957,6 @@ async function wakeLock() { try { if (!wl && navigator.wakeLock && document.visi
 $("#menuBtn").addEventListener("click", () => { audioUnlock(); if (S.locked) return lockedHint(); drawer(); });
 $("#setBtn").addEventListener("click", () => { audioUnlock(); if (S.locked) return lockedHint(); settings(); });
 $("#unlockBtn").addEventListener("click", () => audioUnlock());
-document.querySelectorAll("[data-src]").forEach(b => b.addEventListener("click", () => { if (S.locked) return lockedHint(); setSource(b.dataset.src); }));
 $("#addTimer").addEventListener("click", () => { if (S.locked) return lockedHint(); const p = curProfile(); p.timers.push(defaultTimer(p.timers.length + 1)); save(); renderTimers(); });
 for (const evn of ["pointerdown", "pointerup", "click", "touchend"])
   document.addEventListener(evn, () => { audioUnlock(); wakeLock(); }, { capture: true, passive: true });
