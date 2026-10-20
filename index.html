@@ -507,7 +507,10 @@ function evTime(e) {               // Zeitpunkt des Antippens (nicht der Verarbe
 }
 const nextFull = now => (Math.floor(now / 60000) + 1) * 60000;
 const nextHalf = now => (Math.floor(now / 30000) + 1) * 30000;
-function arm(t, T) { t.start = T; t.stop = null; t.state = "armed"; save(); requestSync(); renderTimers(); }
+function autoLock() {               // beim Start automatisch sperren (abschaltbar in den Einstellungen)
+  if (S.autoLock !== false && !S.locked) { S.locked = true; applyLock(); toast("🔒 Automatisch gesperrt – nur STOPP ist aktiv"); }
+}
+function arm(t, T) { t.start = T; t.stop = null; t.state = "armed"; autoLock(); save(); requestSync(); renderTimers(); }
 
 /* ================================================================ Oberfläche */
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -586,7 +589,7 @@ $("#timers").addEventListener("pointerdown", (e) => {
     if (t.state === "running") { t.stop = T; t.state = "stopped"; }
     else if (t.state === "armed") { t.state = "idle"; t.start = null; }
     save(); renderTimers();
-  } else if (a === "now") { t.start = T; t.stop = null; t.state = "running"; save(); requestSync(); renderTimers(); }
+  } else if (a === "now") { t.start = T; t.stop = null; t.state = "running"; autoLock(); save(); requestSync(); renderTimers(); }
   else if (a === "full") arm(t, nextFull(T));
   else if (a === "half") arm(t, nextHalf(T));
   else if (a === "quick") {
@@ -776,6 +779,8 @@ let testTone = false;
 function settings() {
   const sh = sheet(`<h3>Einstellungen</h3>
     <div class="set"><h4>Design</h4><div class="seg2"><button data-d="8">Instrument</button><button data-d="10">Graustufen</button></div></div>
+    <div class="set"><h4>Schloss</h4><p>Beim Starten eines Timers sperrt sich die App von selbst – dann ist nur STOPP aktiv. Entsperren: Schloss 1,5 s gedrückt halten.</p>
+      <div class="seg2"><button data-al2="on">Automatisch sperren</button><button data-al2="off">Nicht automatisch</button></div></div>
     <div class="set"><h4>Schriftgröße</h4><p>Alles größer oder kleiner, damit es beim Fahren gut lesbar ist.</p>
       <div class="stepper"><button data-sc="-10">−10</button><button data-sc="-5">−5</button><div class="sv num" id="scv"></div><button data-sc="5">+5</button><button data-sc="10">+10</button></div></div>
     <div class="set"><h4>Atomzeit</h4><p>Die Uhr gleicht sich direkt mit der Atomuhr der PTB in Braunschweig ab (wss://uhr.ptb.de). Die Laufzeit durchs Netz wird gemessen und herausgerechnet. Abgleich beim Öffnen, bei jedem Start und alle 5 Minuten.</p>
@@ -797,6 +802,7 @@ function settings() {
     <div class="sheetbtns" style="grid-template-columns:1fr"><button class="primary" data-x="close">Schließen</button></div>`);
   const refresh = () => {
     sh.querySelectorAll("[data-d]").forEach(b => b.classList.toggle("on", b.dataset.d === S.design));
+    sh.querySelectorAll("[data-al2]").forEach(b => b.classList.toggle("on", (b.dataset.al2 === "on") === (S.autoLock !== false)));
     sh.querySelector("#scv").textContent = Math.round(S.scale * 100) + " %";
     sh.querySelector("#alv").textContent = (S.audioLead || 0) + " ms";
     sh.querySelector("#dlv").textContent = dispLead() + " ms" + (S.dispLead == null ? " (auto)" : "");
@@ -814,6 +820,7 @@ function settings() {
   sh.addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return; audioUnlock();
     if (b.dataset.d) { S.design = b.dataset.d; applyLook(); }
+    if (b.dataset.al2) S.autoLock = b.dataset.al2 === "on";
     if (b.dataset.sc) { S.scale = Math.max(0.7, Math.min(1.6, Math.round(S.scale * 100 + +b.dataset.sc) / 100)); applyLook(); }
     if (b.dataset.al) S.audioLead = Math.max(0, Math.min(1000, (S.audioLead || 0) + +b.dataset.al));
     if (b.dataset.dl) S.dispLead = Math.max(0, Math.min(300, dispLead() + +b.dataset.dl));
