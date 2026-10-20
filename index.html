@@ -74,7 +74,7 @@ html[data-design="10"] .logo{display:none}
 .lockbtn::after{content:"";position:absolute;left:0;bottom:0;height:100%;width:var(--hold,0%);background:var(--primary);opacity:.45;pointer-events:none}
 html.locked .lockbtn{background:var(--primary);color:var(--onprimary)}
 .lockbar{margin-top:.35rem;padding:.45rem .6rem;border-radius:var(--radius);background:var(--primary);color:var(--onprimary);font-weight:800;font-size:.85rem;text-align:center}
-html.locked .card button:not(.stop),html.locked .addtimer,html.locked #menuBtn,html.locked #setBtn,html.locked .srcrow button{opacity:.35}
+html.locked .card button:not(.stop):not(.cv),html.locked .card .unit,html.locked .addtimer,html.locked #menuBtn,html.locked #setBtn,html.locked .srcrow button{opacity:.38;transition:opacity .2s}
 .unlock{margin-top:.4rem;width:100%;height:3rem;border-radius:var(--radius);background:var(--primary);color:var(--onprimary);font-weight:800;font-size:1.05rem}
 
 main{padding:.6rem max(.75rem,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 1.5rem) max(.75rem,env(safe-area-inset-left,0px))}
