@@ -52,6 +52,10 @@ html[data-design="10"] .logo{display:none}
 @media (orientation:landscape){.clockrow{display:none}}
 .clock{font-size:min(13.5vw,4.4rem);line-height:1}
 .clock .ms{font-size:.62em;opacity:.8}
+.srcrow{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin:.35rem auto 0;max-width:26rem}
+.srcrow button{height:2.7rem;border-radius:var(--radius);background:var(--btn);font-weight:800;font-size:.95rem}
+.srcrow button.on{background:var(--primary);color:var(--onprimary)}
+@media (orientation:landscape) and (max-height:520px){.srcrow{max-width:20rem}.srcrow button{height:2.2rem}}
 .status{margin-top:.3rem;font-size:.8rem;font-weight:700;color:var(--muted);text-align:center;line-height:1.25;padding:.15rem .4rem;border-radius:4px}
 .status.bad{background:var(--primary);color:var(--onprimary)}
 .unlock{margin-top:.4rem;width:100%;height:3rem;border-radius:var(--radius);background:var(--primary);color:var(--onprimary);font-weight:800;font-size:1.05rem}
@@ -207,6 +211,7 @@ html[data-design="8"] .stop{border-radius:999px}
     <button class="iconbtn" id="setBtn" aria-label="Einstellungen">⚙</button>
   </div>
   <div class="clockrow"><div class="clock num" id="clock2">--:--:--<span class="ms">.---</span></div></div>
+  <div class="srcrow"><button data-src="ptb" class="on">PTB-Atomzeit</button><button data-src="gps">GPS (Handy)</button></div>
   <div class="status" id="status">Verbinde mit der Atomuhr der PTB …</div>
   <button class="unlock" id="unlockBtn" hidden>🔊 Ton aktivieren – einmal tippen</button>
 </header>
@@ -294,7 +299,10 @@ const curProfile = () => S.profiles[Math.min(S.cur, S.profiles.length - 1)];
 const Clock = {
   K: Date.now() - performance.now(), synced: false, syncing: false, rtt: null, srvErr: 0,
   last: null, error: null, prevSys: Date.now() - performance.now(), pauses: 0,
-  now() { return performance.now() + this.K; },
+  now() { return performance.now() + this.k(); },
+  k() {   // aktive Zeitquelle; GPS nur, wenn das Handy echte GPS-Zeitstempel liefert
+    const g = S.source === "gps" && !gpsSysStamped() ? gpsK() : null; return g == null ? this.K : g;
+  },
 };
 function ptbSamples(n) {
   return new Promise((resolve, reject) => {
@@ -365,9 +373,44 @@ function requestSync() { scheduleSync(0); }
    Zähler wird erkannt, ausgeglichen und sofort neu mit der PTB abgeglichen. */
 function checkPause() {
   const sys = Date.now() - performance.now(), d = sys - Clock.prevSys;
-  if (Math.abs(d) > 40) { Clock.K += d; Clock.pauses++; requestSync(); }
+  if (Math.abs(d) > 40) { Clock.K += d; Clock.pauses++; G.samples.length = 0; requestSync(); }
   Clock.prevSys = sys;
 }
+
+/* ================================================================ GPS-Zeit des Handys */
+/* Jede GPS-Position trägt einen Zeitstempel. Die Position kommt immer etwas verspätet an,
+   darum zählt die früheste Ankunft der letzten 60 s (wie bei der PC-Version). Manche Handys
+   (oft das iPhone) stempeln die Position aber mit der eigenen Handy-Uhr statt mit der GPS-Zeit –
+   das wird erkannt und angezeigt. */
+const G = { watch: null, samples: [], last: null, acc: null, err: null, sys: 0, total: 0 };
+function gpsStart() {
+  if (G.watch != null) return;
+  if (!navigator.geolocation) { G.err = "Dieses Handy bietet im Browser kein GPS an"; return; }
+  G.err = null;
+  G.watch = navigator.geolocation.watchPosition((pos) => {
+    const p = performance.now(), ts = pos.timestamp;
+    if (!Number.isFinite(ts)) return;
+    G.total++; if (Math.abs(ts - Date.now()) < 3) G.sys++;      // Stempel = Handy-Uhr?
+    G.samples.push([p, ts - p]); G.last = p; G.acc = pos.coords.accuracy; G.err = null;
+    while (G.samples.length && p - G.samples[0][0] > 60000) G.samples.shift();
+  }, (e) => {
+    G.err = e.code === 1 ? "Standort-Zugriff nicht erlaubt (in den Einstellungen erlauben)" :
+            e.code === 2 ? "kein GPS-Empfang" : "GPS antwortet nicht";
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+}
+function gpsStop() { if (G.watch != null) { navigator.geolocation.clearWatch(G.watch); G.watch = null; } G.samples.length = 0; }
+function gpsRaw() {
+  if (!G.samples.length || performance.now() - G.last > 10000) return null;
+  let m = -Infinity; for (const [, v] of G.samples) if (v > m) m = v; return m;
+}
+function gpsK() { const r = gpsRaw(); return r == null ? null : r + (S.gpsCorr || 0); }
+const gpsSysStamped = () => G.total >= 5 && G.sys / G.total > 0.8;
+function setSource(src) {
+  S.source = src; save();
+  if (src === "gps") gpsStart(); else gpsStop();
+  audioResync(); renderSource(); renderStatus();
+}
+function renderSource() { document.querySelectorAll("[data-src]").forEach(b => b.classList.toggle("on", b.dataset.src === (S.source || "ptb"))); }
 
 /* ================================================================ Ton (Web Audio, sample-genau) */
 const A = { ctx: null, buf: {}, sched: new Map(), keep: null, skipped: 0 };
@@ -396,7 +439,7 @@ async function audioUnlock() {
   $("#unlockBtn").hidden = !!(A.ctx && A.ctx.state === "running");
 }
 function ctxTimeFor(T) {            // UTC-ms -> AudioContext-Zeit, inkl. Ausgabe-Latenz
-  const p = T - Clock.K, lead = (S.audioLead || 0) / 1000;
+  const p = T - Clock.k(), lead = (S.audioLead || 0) / 1000;
   const ts = A.ctx.getOutputTimestamp ? A.ctx.getOutputTimestamp() : null;
   if (ts && ts.performanceTime > 0 && ts.contextTime > 0) return ts.contextTime + (p - ts.performanceTime) / 1000 - lead;
   return A.ctx.currentTime + (p - performance.now()) / 1000 - (A.ctx.outputLatency || A.ctx.baseLatency || 0) - lead;
@@ -453,7 +496,7 @@ const inputDelays = [], frameIv = [];
 function evTime(e) {               // Zeitpunkt des Antippens (nicht der Verarbeitung)
   const ts = e && e.timeStamp, p = performance.now();
   if (ts && ts > 0 && ts <= p && p - ts < 1000) { inputDelays.push(p - ts); if (inputDelays.length > 20) inputDelays.shift(); }
-  return (ts && ts > 0 && ts <= p && p - ts < 1000) ? ts + Clock.K : Clock.now();
+  return (ts && ts > 0 && ts <= p && p - ts < 1000) ? ts + Clock.k() : Clock.now();
 }
 const nextFull = now => (Math.floor(now / 60000) + 1) * 60000;
 const nextHalf = now => (Math.floor(now / 30000) + 1) * 30000;
@@ -651,6 +694,17 @@ function loop(ts) {
 let statusTick = 0;
 function renderStatus() {
   const el = $("#status"); let txt, bad = false;
+  if (S.source === "gps") {
+    const g = gpsK();
+    if (g == null) { txt = `⚠ GPS: ${G.err || "warte auf GPS-Position …"} – solange gilt die PTB-Zeit`; bad = true; }
+    else if (gpsSysStamped()) { txt = "⚠ Dieses Handy liefert dem Browser keine echte GPS-Uhrzeit (nur die Handy-Uhr) – darum gilt weiter die PTB-Zeit"; bad = true; }
+    else {
+      txt = `● GPS-Zeit (Handy)${G.acc ? ` · Position ±${Math.round(G.acc)} m` : ""}`;
+      if (Clock.synced) txt += ` · Unterschied zu PTB ${(g - Clock.K >= 0 ? "+" : "") + Math.round(g - Clock.K)} ms`;
+    }
+    if (el.textContent !== txt) el.textContent = txt;
+    el.classList.toggle("bad", bad); return;
+  }
   if (Clock.syncing && !Clock.synced) txt = "Verbinde mit der Atomuhr der PTB …";
   else if (!Clock.synced) { txt = `⚠ Keine Verbindung zur PTB-Atomuhr – zeigt Handy-Uhr (${Clock.error || "warte"})`; bad = true; }
   else {
@@ -718,7 +772,11 @@ function settings() {
     <div class="set"><h4>Atomzeit</h4><p>Die Uhr gleicht sich direkt mit der Atomuhr der PTB in Braunschweig ab (wss://uhr.ptb.de). Die Laufzeit durchs Netz wird gemessen und herausgerechnet. Abgleich beim Öffnen, bei jedem Start und alle 5 Minuten.</p>
       <div id="syncinfo" class="num" style="font-size:.95rem;font-weight:700;margin-bottom:.4rem"></div>
       <button class="wide" data-x="sync">⟳ Jetzt neu abgleichen</button>
-      <p style="margin-top:.6rem">GPS-Zeit: Der Handy-Browser gibt die genaue GPS-Uhrzeit leider nicht heraus. Darum nutzt die Handy-Version nur die PTB-Atomzeit.</p></div>
+</div>
+    <div class="set"><h4>GPS-Zeit (Handy)</h4><p>Nutzt die Zeitstempel der GPS-Positionen des Handys. Sie kommen immer etwas verspätet an; diese Verzögerung lässt sich einmal an der PTB-Zeit ausgleichen (Internet und GPS gleichzeitig nötig). Manche Handys – oft das iPhone – geben dem Browser statt der GPS-Zeit nur die eigene Uhr; das wird erkannt und oben angezeigt.</p>
+      <div id="gpsinfo" class="num" style="font-size:.95rem;font-weight:700;margin-bottom:.4rem"></div>
+      <button class="wide" data-x="gpscal">GPS an PTB angleichen</button>
+      <button class="wide" data-x="gpsreset">Ausgleich zurücksetzen</button></div>
     <div class="set"><h4>Ton-Vorlauf</h4><p>Ansagen und Pieptöne werden auf die Millisekunde genau eingeplant. Nur Lautsprecher mit eigener Verzögerung (Bluetooth: 100–300 ms) brauchen einen Vorlauf.</p>
       <div class="stepper"><button data-al="-10">−10</button><button data-al="-1">−1</button><div class="sv num" id="alv"></div><button data-al="1">+1</button><button data-al="10">+10</button></div>
       <button class="wide" data-x="test" id="testbtn">Tontest: Piep zu jeder vollen Sekunde</button></div>
@@ -734,6 +792,11 @@ function settings() {
     sh.querySelector("#alv").textContent = (S.audioLead || 0) + " ms";
     sh.querySelector("#dlv").textContent = dispLead() + " ms" + (S.dispLead == null ? " (auto)" : "");
     sh.querySelector("#testbtn").classList.toggle("on", testTone);
+    const gr = gpsRaw();
+    sh.querySelector("#gpsinfo").textContent = S.source !== "gps" ? "GPS ist aus (oben auf „GPS (Handy)“ tippen)" :
+      gr == null ? (G.err || "warte auf GPS-Position …") :
+      `${G.total} Positionen · ${gpsSysStamped() ? "⚠ nur Handy-Uhr" : "GPS-Zeitstempel"} · Ausgleich ${Math.round(S.gpsCorr || 0)} ms` +
+      (Clock.synced ? ` · Unterschied zu PTB ${Math.round(gr + (S.gpsCorr || 0) - Clock.K)} ms` : "");
     sh.querySelector("#syncinfo").textContent = Clock.synced
       ? `Laufzeit ${Math.round(Clock.rtt)} ms · Unsicherheit ±${(Clock.rtt / 2 + Clock.srvErr).toFixed(0)} ms · Abweichung Handy-Uhr ${Math.round((Date.now() - Clock.now()))} ms`
       : "Noch nicht abgeglichen" + (Clock.error ? ` (${Clock.error})` : "");
@@ -748,6 +811,12 @@ function settings() {
     const x = b.dataset.x;
     if (x === "dlauto") S.dispLead = null;
     if (x === "sync") requestSync();
+    if (x === "gpscal") {
+      const gr = gpsRaw();
+      if (gr == null || !Clock.synced) toast("Dafür braucht es gleichzeitig GPS-Empfang und PTB-Zeit (Internet).");
+      else { S.gpsCorr = Clock.K - gr; audioResync(); toast(`GPS angeglichen: Ausgleich ${Math.round(S.gpsCorr)} ms`); }
+    }
+    if (x === "gpsreset") { S.gpsCorr = 0; audioResync(); }
     if (x === "test") testTone = !testTone;
     if (x === "close") { testTone = false; closeSheet(); }
     if (x === "lat") { testTone = false; return latencyTest(); }
@@ -807,6 +876,18 @@ async function latencyTest() {
     const ks = smp.slice(0, 4).map(x => x.K); L.push(`  Streuung der 4 besten Messungen: ${(Math.max(...ks) - Math.min(...ks)).toFixed(1)} ms`);
     L.push(`  Handy-Uhr weicht von der Atomzeit ab um: ${(Date.now() - performance.now() - smp[0].K).toFixed(0)} ms (wird nicht benutzt)`);
   } catch (e) { L.push("  ⚠ PTB nicht erreichbar: " + (e.message || e)); }
+  L.push("", "GPS-ZEIT (HANDY)");
+  if (S.source !== "gps") L.push("  aus – oben auf „GPS (Handy)“ tippen, um sie mitzumessen");
+  else {
+    const gr = gpsRaw();
+    if (gr == null) L.push("  " + (G.err || "noch keine GPS-Position"));
+    else {
+      const v = G.samples.map(x => x[1]); const spread = Math.max(...v) - Math.min(...v);
+      L.push(`  ${G.samples.length} Positionen in 60 s · Ankunft streut um ${spread.toFixed(0)} ms (früheste zählt)`);
+      L.push(`  Zeitstempel: ${gpsSysStamped() ? "⚠ nur Handy-Uhr – keine echte GPS-Zeit" : "GPS"} · Ausgleich ${Math.round(S.gpsCorr || 0)} ms`);
+      if (Clock.synced) L.push(`  Unterschied GPS ↔ PTB: ${Math.round(gr + (S.gpsCorr || 0) - Clock.K)} ms`);
+    }
+  }
   L.push("", "TON");
   if (A.ctx) {
     const ol = A.ctx.outputLatency, bl = A.ctx.baseLatency, ts = A.ctx.getOutputTimestamp && A.ctx.getOutputTimestamp();
@@ -832,6 +913,7 @@ async function wakeLock() { try { if (!wl && navigator.wakeLock && document.visi
 $("#menuBtn").addEventListener("click", () => { audioUnlock(); drawer(); });
 $("#setBtn").addEventListener("click", () => { audioUnlock(); settings(); });
 $("#unlockBtn").addEventListener("click", () => audioUnlock());
+document.querySelectorAll("[data-src]").forEach(b => b.addEventListener("click", () => setSource(b.dataset.src)));
 $("#addTimer").addEventListener("click", () => { const p = curProfile(); p.timers.push(defaultTimer(p.timers.length + 1)); save(); renderTimers(); });
 for (const evn of ["pointerdown", "pointerup", "click", "touchend"])
   document.addEventListener(evn, () => { audioUnlock(); wakeLock(); }, { capture: true, passive: true });
@@ -839,7 +921,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") { checkPause(); requestSync(); wakeLock(); if (A.ctx && A.ctx.state !== "running") A.ctx.resume().catch(() => {}); }
 });
 window.addEventListener("online", requestSync);
-applyLook(); renderTimers(); renderStatus();
+applyLook(); renderTimers(); renderSource(); if (S.source === "gps") gpsStart(); renderStatus();
 setInterval(() => {
   renderStatus();
   $("#unlockBtn").hidden = !!(A.ctx && A.ctx.state === "running");
