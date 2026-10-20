@@ -271,7 +271,7 @@ function parseDur(text) {           // 'ss', 'mm:ss', 'h:mm:ss' (Tausendstel , o
   const parts = t.split(":"); if (parts.length > 3) throw new Error("Format");
   let total = 0;
   parts.forEach((p, i) => {
-    if (!/^\d+(\.\d*)?$/.test(p)) throw new Error("Format");
+    if (!(i === parts.length - 1 ? /^\d+(\.\d*)?$/ : /^\d+$/).test(p)) throw new Error("Format");
     const v = parseFloat(p); if (i > 0 && v >= 60) throw new Error("Format");
     total = total * 60 + v;
   });
@@ -280,15 +280,18 @@ function parseDur(text) {           // 'ss', 'mm:ss', 'h:mm:ss' (Tausendstel , o
 function parseTod(text) {           // Uhrzeit -> ms seit Mitternacht
   const parts = String(text).trim().replace(".", ",").split(":");
   if (parts.length < 2 || parts.length > 3) throw new Error("Uhrzeit bitte als HH:MM oder HH:MM:SS, z. B. 09:31:00");
+  if (!/^\d{1,2}$/.test(parts[0]) || !/^\d{1,2}$/.test(parts[1]) || (parts.length === 3 && !/^\d{1,2}(,\d*)?$/.test(parts[2])))
+    throw new Error("Uhrzeit bitte als HH:MM oder HH:MM:SS, z. B. 09:31:00");
   const h = +parts[0], m = +parts[1], s = parts.length === 3 ? parseFloat(parts[2].replace(",", ".")) : 0;
   if (![h, m, s].every(Number.isFinite) || h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s >= 60)
     throw new Error("Ungültige Uhrzeit.");
   return ((h * 60 + m) * 60) * 1000 + Math.round(s * 1000);
 }
-function todToUtc(tod, now) {       // nächster Zeitpunkt dieser Uhrzeit (Ortszeit)
-  const d = new Date(now); d.setHours(0, 0, 0, 0);
-  let t = d.getTime() + tod;
-  if (t < now - 12 * 3600e3) t += 86400e3;
+function todToUtc(tod, now) {       // nächster Zeitpunkt dieser Uhrzeit (Ortszeit, auch an Zeitumstellungs-Tagen richtig)
+  const h = Math.floor(tod / 3600e3), m = Math.floor(tod / 60e3) % 60, ms = tod % 60e3;
+  const at = (dayShift) => { const d = new Date(now); d.setDate(d.getDate() + dayShift); d.setHours(h, m, 0, 0); return d.getTime() + ms; };
+  let t = at(0);
+  if (t < now - 12 * 3600e3) t = at(1);
   return t;
 }
 const vDur = t => { if (!t) return null; try { return parseDur(t) > 0 ? null : "Die Zeit muss größer als 0 sein."; } catch { return "Format: Min:Sek,Tausendstel – z. B. 2:30,500"; } };
@@ -297,8 +300,36 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 
 /* ================================================================ Speicher */
 function defaultTimer(n) { return { id: uid(), name: `Timer ${n}`, at: "", quick: "10", solls: [""], state: "idle", start: null, stop: null }; }
+function repairState(s) {           // alte/kaputte Daten reparieren statt abzustürzen
+  if (!s || typeof s !== "object" || !Array.isArray(s.profiles)) return null;
+  const STATES = ["idle", "armed", "running", "stopped"];
+  s.profiles = s.profiles.filter(p => p && typeof p === "object").map((p, i) => {
+    if (typeof p.name !== "string" || !p.name) p.name = `Profil ${i + 1}`;
+    if (!p.id) p.id = uid();
+    if (!Array.isArray(p.timers)) p.timers = [];
+    p.timers = p.timers.filter(t => t && typeof t === "object").map((t, j) => {
+      const d = defaultTimer(j + 1);
+      for (const k of ["id", "name", "at", "quick"]) if (typeof t[k] !== "string") t[k] = d[k];
+      if (!Array.isArray(t.solls) || !t.solls.length) t.solls = [""];
+      t.solls = t.solls.map(v => typeof v === "string" ? v : "");
+      if (!STATES.includes(t.state)) t.state = "idle";
+      for (const k of ["start", "stop"]) if (!Number.isFinite(t[k])) t[k] = null;
+      if ((t.state === "armed" || t.state === "running") && t.start == null) t.state = "idle";
+      if (t.state === "stopped" && (t.start == null || t.stop == null)) t.state = "idle";
+      return t;
+    });
+    return p;
+  });
+  if (!s.profiles.length) return null;
+  if (!Number.isInteger(s.cur) || s.cur < 0 || s.cur >= s.profiles.length) s.cur = 0;
+  if (!Number.isFinite(s.scale) || s.scale <= 0) s.scale = 1;
+  if (!Number.isFinite(s.audioLead)) s.audioLead = 0;
+  if (s.dispLead != null && !Number.isFinite(s.dispLead)) s.dispLead = null;
+  if (s.design !== "8" && s.design !== "10") s.design = "8";
+  return s;
+}
 function loadState() {
-  try { const s = JSON.parse(localStorage.getItem(LS_KEY)); if (s && Array.isArray(s.profiles) && s.profiles.length) return s; } catch {}
+  try { const s = repairState(JSON.parse(localStorage.getItem(LS_KEY))); if (s) return s; } catch {}
   return { design: "8", scale: 1, audioLead: 0, dispLead: null, profiles: [{ id: uid(), name: "Profil 1", timers: [defaultTimer(1)] }], cur: 0 };
 }
 const S = loadState();
@@ -365,16 +396,19 @@ function ptbSamples(n) {
   });
 }
 async function ptbSync() {
-  if (Clock.syncing || !navigator.onLine && Clock.synced) return;
+  if (Clock.syncing) return;
+  if (!navigator.onLine && Clock.synced) { Clock.error = "offline"; renderStatus(); return; }
   Clock.syncing = true; renderStatus();
   try {
     const smp = await ptbSamples(8);
     smp.sort((a, b) => a.rtt - b.rtt);
     const best = smp[0];
-    const recent = Clock.synced && Clock.last && performance.now() - Clock.last < 30 * 60e3;
-    // deutlich schlechtere Messung (z. B. schwaches Netz) -> den genaueren alten Wert behalten
-    if (!(recent && best.rtt / 2 > Math.max(2 * (Clock.rtt / 2), Clock.rtt / 2 + 10))) {
-      Clock.K = best.K; Clock.rtt = best.rtt; Clock.srvErr = best.e;
+    // deutlich schlechtere Messung (z. B. schwaches Netz) -> den genaueren alten Wert behalten.
+    // Die Toleranz wächst mit dem Alter des alten Werts (Handy-Uhr driftet), nach 30 min zählt jede Messung.
+    const age = Clock.accepted ? performance.now() - Clock.accepted : Infinity;
+    const limit = Math.max(2 * (Clock.rtt / 2), Clock.rtt / 2 + 10) + age / 1000 * 0.05;
+    if (!(Clock.synced && age < 30 * 60e3 && best.rtt / 2 > limit)) {
+      Clock.K = best.K; Clock.rtt = best.rtt; Clock.srvErr = best.e; Clock.accepted = performance.now();
     }
     Clock.synced = true; Clock.last = performance.now(); Clock.error = null;
     Clock.prevSys = Date.now() - performance.now();
@@ -390,9 +424,15 @@ function requestSync() { scheduleSync(0); }
 /* Handy im Standby: performance.now() kann stehen bleiben. Ein Sprung zwischen Systemuhr und
    Zähler wird erkannt, ausgeglichen und sofort neu mit der PTB abgeglichen. */
 function checkPause() {
-  const sys = Date.now() - performance.now(), d = sys - Clock.prevSys;
-  if (Math.abs(d) > 40) { Clock.K += d; Clock.pauses++; G.samples.length = 0; requestSync(); }
-  Clock.prevSys = sys;
+  const wall = Date.now(), sys = wall - performance.now(), d = sys - Clock.prevSys;
+  const gap = Clock.prevWall ? wall - Clock.prevWall : 0;     // so lange lief die Anzeige nicht
+  if (Math.abs(d) > 40) {
+    // Nur echte Pausen (Anzeige stand > 1 s) ausgleichen. Ein Sprung bei laufender Anzeige ist
+    // eine Korrektur der Handy-Uhr – die Atomzeit stimmt dann weiter, nur neu abgleichen.
+    if (gap > 1000) { Clock.K += d; Clock.pauses++; G.samples.length = 0; }
+    requestSync();
+  }
+  Clock.prevSys = sys; Clock.prevWall = wall;
 }
 
 /* ================================================================ GPS-Zeit des Handys */
@@ -412,6 +452,7 @@ function gpsStart() {
     G.samples.push([p, ts - p]); G.last = p; G.acc = pos.coords.accuracy; G.err = null;
     while (G.samples.length && p - G.samples[0][0] > 60000) G.samples.shift();
   }, (e) => {
+    if (e.code === 1 && G.watch != null) { navigator.geolocation.clearWatch(G.watch); G.watch = null; }  // später erneut erlauben möglich
     G.err = e.code === 1 ? "Standort-Zugriff nicht erlaubt (in den Einstellungen erlauben)" :
             e.code === 2 ? "kein GPS-Empfang" : "GPS antwortet nicht";
   }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
@@ -525,7 +566,7 @@ function autoLock() {               // beim Start automatisch sperren (abschaltb
 function timerActive(t, now) {
   if (t.state === "armed") return true;
   if (t.state !== "running") return false;
-  const sg = segs(t); if (!sg.length) return true;
+  const sg = segs(t); if (!sg.length) return now - t.start < 12 * 3600e3;   // vergessene Timer (> 12 h) zählen nicht
   return now - t.start < sg[sg.length - 1].end + 1000;   // +1 s: „JETZT!“ noch zeigen
 }
 function autoUnlockCheck(now) {      // automatisch gesperrt + kein aktiver Timer mehr -> entsperren
@@ -606,6 +647,7 @@ $("#timers").addEventListener("pointerdown", (e) => {
   const a = b.dataset.a; if (!["stop", "now", "full", "half", "quick"].includes(a)) return;
   if (S.locked && a !== "stop") return lockedHint();
   const card = b.closest(".card"), [, t] = findTimer(card.dataset.id); if (!t) return;
+  if (a !== "stop" && t.state === "running") { e.preventDefault(); return toast("Timer läuft – erst STOPP oder Reset"); }
   const T = evTime(e); e.preventDefault();
   if (a === "stop") {
     if (t.state === "armed" && T >= t.start) t.state = "running";
@@ -623,7 +665,8 @@ $("#timers").addEventListener("pointerdown", (e) => {
 });
 $("#timers").addEventListener("click", (e) => {
   const b = e.target.closest("[data-a],[data-f]"); if (!b) return;
-  if (S.locked) { if (b.dataset.a !== "stop") lockedHint(); return; }
+  if (["stop", "now", "full", "half", "quick"].includes(b.dataset.a)) return;   // schon bei pointerdown erledigt
+  if (S.locked) return lockedHint();
   const card = b.closest(".card"), [p, t] = findTimer(card.dataset.id); if (!t) return;
   const a = b.dataset.a, f = b.dataset.f;
   if (a === "rename") textSheet("Timer umbenennen", t.name, v => { t.name = v; save(); renderTimers(); });
@@ -744,7 +787,7 @@ function renderStatus() {
   if (Clock.syncing && !Clock.synced) txt = "Verbinde mit der Atomuhr der PTB …";
   else if (!Clock.synced) { txt = `⚠ Keine Verbindung zur PTB-Atomuhr – zeigt Handy-Uhr (${Clock.error || "warte"})`; bad = true; }
   else {
-    const age = Math.round((performance.now() - Clock.last) / 1000), acc = Clock.rtt / 2 + Clock.srvErr;
+    const age = Math.round((performance.now() - (Clock.accepted || Clock.last)) / 1000), acc = Clock.rtt / 2 + Clock.srvErr;
     if (Clock.error) {
       const drift = acc + age * 0.05;
       txt = `⚠ Kein Netz – Uhr läuft mit letztem PTB-Abgleich weiter (vor ${Math.floor(age / 60)} min, höchstens ±${Math.round(drift)} ms)`; bad = drift > 100;
@@ -981,7 +1024,13 @@ function applyLock() {
 
 /* ================================================================ Bildschirm wach halten */
 let wl = null;
-async function wakeLock() { try { if (!wl && navigator.wakeLock && document.visibilityState === "visible") { wl = await navigator.wakeLock.request("screen"); wl.addEventListener("release", () => wl = null); } } catch {} }
+let wlPending = false;
+async function wakeLock() {
+  if (wl || wlPending || !navigator.wakeLock || document.visibilityState !== "visible") return;
+  wlPending = true;
+  try { wl = await navigator.wakeLock.request("screen"); wl.addEventListener("release", () => wl = null); } catch {}
+  wlPending = false;
+}
 
 /* ================================================================ Start */
 $("#menuBtn").addEventListener("click", () => { audioUnlock(); if (S.locked) return lockedHint(); drawer(); });
