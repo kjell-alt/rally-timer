@@ -382,7 +382,7 @@ async function audioUnlock() {
     if (!A.ctx) {
       try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch {}  // iPhone: auch im Lautlos-Modus
       A.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
-      A.buf.beep = tone(1500, 650); A.buf.w = tone(1000, 150); A.buf.tick = tone(1000, 60); A.buf.tock = tone(1600, 250);
+      A.buf.beep = tone(1500, 250); A.buf.w = tone(1000, 150); A.buf.tick = tone(1000, 60); A.buf.tock = tone(1600, 250);
       for (const [k, v] of Object.entries(WORDS)) {
         A.ctx.decodeAudioData(b64buf(v)).then(b => { A.buf[k] = b; }).catch(() => {});
       }
